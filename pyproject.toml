@@ -39,9 +39,12 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["custom_components/skylink/_client", "tests"]
+files = ["custom_components/skylink", "tests"]
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = "."
 
 [[tool.mypy.overrides]]
 # HA adapters import HA modules that don't ship type stubs for every release.
-module = "custom_components.skylink.*"
+module = "homeassistant.*"
 ignore_missing_imports = true

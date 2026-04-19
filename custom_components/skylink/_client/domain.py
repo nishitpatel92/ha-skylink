@@ -10,7 +10,7 @@ the authoritative source of the wire-level int → state mapping.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import IntEnum, StrEnum
 
 
 class DoorState(IntEnum):
@@ -39,7 +39,7 @@ class DoorState(IntEnum):
             return cls.UNKNOWN
 
 
-class DeviceType(str, Enum):
+class DeviceType(StrEnum):
     """Skylink device model.
 
     Values match the `type` field in the MQTT device payload.

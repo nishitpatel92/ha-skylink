@@ -43,8 +43,9 @@ class TestDeviceType:
 
 class TestDevice:
     def test_device_is_frozen(self) -> None:
+        # dataclasses.FrozenInstanceError inherits from AttributeError.
         dev = Device(hub_id="ABC", name="Garage", device_type=DeviceType.GDO)
-        with pytest.raises(Exception):  # FrozenInstanceError is a dataclass exception
+        with pytest.raises(AttributeError):
             dev.name = "Other"  # type: ignore[misc]
 
     def test_device_is_hashable(self) -> None:
