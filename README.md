@@ -26,13 +26,34 @@ custom_components/skylink/
     domain.py            Door, Hub, DoorState enum, Command
     protocol.py          Signing, payload builders, response parsers (pure)
     http.py              aiohttp transport
-    mqtt.py              paho-mqtt transport
+    mqtt.py              aiomqtt transport
     client.py            OrbitClient orchestrator
     errors.py            Exception hierarchy
 
 tests/
   unit/                  Pure tests — no network, no HA
-  integration/           Against ephemeral mosquitto (testcontainers)
+  integration/           Against an ephemeral mosquitto (scripts/test-integration.sh)
+scripts/
+  test-integration.sh    Spin up mosquitto, run integration tests, tear down
+  mosquitto.conf         Config used by the test broker
+```
+
+## Development
+
+```sh
+# set up
+uv venv && uv pip install -e ".[dev]"
+
+# fast feedback (no docker)
+.venv/bin/pytest tests/unit
+
+# full suite (needs docker)
+./scripts/test-integration.sh                 # starts broker, tests, tears down
+KEEP_BROKER=1 ./scripts/test-integration.sh   # leave broker up between runs
+
+# lint + types
+.venv/bin/ruff check .
+.venv/bin/mypy
 ```
 
 ## Credits

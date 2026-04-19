@@ -77,11 +77,20 @@ class OrbitMqtt:
         keepalive: int = protocol.MQTT_KEEPALIVE_SECONDS,
         *,
         tls_context: ssl.SSLContext | None = None,
+        enable_tls: bool = True,
     ) -> None:
         self._host = host
         self._port = port
         self._keepalive = keepalive
-        self._tls_context = tls_context if tls_context is not None else _make_tls_context()
+        if enable_tls:
+            self._tls_context: ssl.SSLContext | None = (
+                tls_context if tls_context is not None else _make_tls_context()
+            )
+        else:
+            # Integration-test path: local mosquitto without TLS. The real
+            # broker requires TLS — production callers should leave the
+            # default.
+            self._tls_context = None
 
         self._acc_no = ""
         self._password = ""
