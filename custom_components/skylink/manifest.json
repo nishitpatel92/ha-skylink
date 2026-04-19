@@ -1,0 +1,12 @@
+{
+  "domain": "skylink",
+  "name": "Skylink",
+  "version": "0.1.0",
+  "codeowners": ["@nishit-homelab"],
+  "config_flow": true,
+  "iot_class": "cloud_push",
+  "documentation": "https://github.com/nishit-homelab/ha-skylink",
+  "issue_tracker": "https://github.com/nishit-homelab/ha-skylink/issues",
+  "dependencies": [],
+  "requirements": ["aiohttp>=3.9", "paho-mqtt>=1.6"]
+}

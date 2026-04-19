@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ha-skylink-dev"
+version = "0.0.0"
+description = "Dev/test harness for ha-skylink. Not a distributable package."
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "aioresponses>=0.7",
+  "testcontainers>=4",
+  "mypy>=1.10",
+  "ruff>=0.5",
+  "aiohttp>=3.9",
+  "paho-mqtt>=1.6",
+]
+
+[tool.hatch.build.targets.wheel]
+# Nothing to build — this project's only purpose is to group dev dependencies.
+# The actual client will be extracted to its own PyPI package later.
+bypass-selection = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["custom_components/skylink/_client", "tests"]
+
+[[tool.mypy.overrides]]
+# HA adapters import HA modules that don't ship type stubs for every release.
+module = "custom_components.skylink.*"
+ignore_missing_imports = true
