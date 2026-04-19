@@ -8,5 +8,5 @@
   "documentation": "https://github.com/nishit-homelab/ha-skylink",
   "issue_tracker": "https://github.com/nishit-homelab/ha-skylink/issues",
   "dependencies": [],
-  "requirements": ["aiohttp>=3.9", "paho-mqtt>=1.6"]
+  "requirements": ["aiohttp>=3.9", "aiomqtt>=2.3"]
 }

@@ -17,7 +17,7 @@ dev = [
   "mypy>=1.10",
   "ruff>=0.5",
   "aiohttp>=3.9",
-  "paho-mqtt>=1.6",
+  "aiomqtt>=2.3",
 ]
 
 [tool.hatch.build.targets.wheel]
