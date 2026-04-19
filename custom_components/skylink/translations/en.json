@@ -2,8 +2,17 @@
   "config": {
     "step": {
       "user": {
+        "title": "Skylink account",
+        "description": "Sign in with your Orbit Home app email and password.",
         "data": {
           "username": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Skylink",
+        "description": "The stored password for {username} is no longer valid. Enter the current password.",
+        "data": {
           "password": "Password"
         }
       }
@@ -14,7 +23,8 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "This account is already configured"
+      "already_configured": "This account is already configured",
+      "reauth_successful": "Re-authentication successful"
     }
   }
 }

@@ -17,6 +17,9 @@ dev = [
   "ruff>=0.5",
   "aiohttp>=3.9",
   "aiomqtt>=2.3",
+  # Installed so mypy can type-check the HA adapters and tests can import
+  # the adapter modules. Not a runtime requirement of the integration.
+  "homeassistant>=2024.1",
 ]
 
 [tool.hatch.build.targets.wheel]
