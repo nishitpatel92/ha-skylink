@@ -55,12 +55,22 @@ logging.basicConfig(
 log = logging.getLogger("live-test")
 
 # Tunables — conservative defaults. A residential door opens in 10-15s;
-# allowing 45s for the full motion to complete gives margin for slow
-# doors, MQTT delays, and variable hardware.
+# allowing 60s for full motion to complete gives margin for slow doors,
+# pre-motion delays (lights, beeper), and variable hardware.
 INITIAL_PUSH_TIMEOUT = 15.0
 DISCOVER_TIMEOUT = 10.0
-STABILIZE_TIMEOUT = 45.0
-STABILIZE_QUIET_SECONDS = 5.0  # "stable" == no state change for this long
+TOGGLE_RESPONSE_TIMEOUT = 15.0  # How long to wait for the door to start moving
+STABILIZE_TIMEOUT = 60.0
+STABILIZE_QUIET_SECONDS = 5.0  # Quiet window that counts as "settled"
+
+# A door only counts as "stable" when it's in one of these states AND
+# no pushes have arrived for STABILIZE_QUIET_SECONDS. OPENING / CLOSING
+# / CLOSE_DELAY are transient: the door emits one push when motion
+# begins, then is silent for 15-25s while physically moving, which is
+# not the same as "stable".
+_TERMINAL_STATES = frozenset(
+    {DoorState.OPEN, DoorState.CLOSED, DoorState.OPEN_HALF, DoorState.OPEN_HALF_ALT}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -102,22 +112,50 @@ class StateTracker:
         except TimeoutError:
             return False
 
+    async def wait_for_change_from(
+        self,
+        hub_id: str,
+        baseline: DoorState | None,
+        timeout: float,
+    ) -> DoorState | None:
+        """Wait for the state to become something other than `baseline`.
+
+        Returns the new state, or None if no different state arrives
+        within `timeout`. Useful for "did the door respond to my toggle".
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if not await self.wait_for_any_update(hub_id, remaining):
+                return None
+            current = self.current(hub_id)
+            if current is not None and current != baseline:
+                return current
+        return None
+
     async def wait_for_stable(
         self,
         hub_id: str,
         quiet_for: float,
         overall_timeout: float,
     ) -> DoorState | None:
-        """Wait until `quiet_for` seconds pass without a new update.
+        """Wait for a terminal state held quiet for `quiet_for` seconds.
 
-        Returns the final state, or None on overall timeout.
+        Silence alone is not enough — residential doors go silent for
+        15-25s during actual motion. We require the current state to be
+        terminal (OPEN / CLOSED / half-open) before accepting.
         """
         deadline = asyncio.get_running_loop().time() + overall_timeout
         while asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
-            if not await self.wait_for_any_update(hub_id, min(quiet_for, remaining)):
-                # No update in the quiet window — we're stable.
-                return self.current(hub_id)
+            got_update = await self.wait_for_any_update(
+                hub_id, min(quiet_for, remaining)
+            )
+            current = self.current(hub_id)
+            if not got_update and current is not None and current in _TERMINAL_STATES:
+                return current
+            # Either an update arrived (reset quiet window) or we're still
+            # mid-motion (current is transient). Keep waiting.
         return None
 
 
@@ -175,6 +213,64 @@ def confirm(prompt: str) -> bool:
         return False
 
 
+async def _send_and_wait(
+    client: OrbitClient,
+    target: Device,
+    tracker: StateTracker,
+    label: str,
+) -> DoorState | None:
+    """Send one toggle; wait for the door to start moving then settle.
+
+    Returns the terminal state reached, or None if the door never
+    responded or never settled.
+    """
+    before = tracker.current(target.hub_id)
+    before_label = before.name if before is not None else "?"
+    log.info("        %s  sending toggle (pre-toggle state=%s)", label, before_label)
+
+    t0 = time.monotonic()
+    await client.toggle(target.hub_id, target.device_type)
+
+    # Phase 1: wait for ANY change away from the pre-toggle state.
+    # This catches "hardware ignored the toggle" cases early.
+    transition = await tracker.wait_for_change_from(
+        target.hub_id, before, TOGGLE_RESPONSE_TIMEOUT
+    )
+    if transition is None:
+        log.warning(
+            "        %s  no state change within %.0fs — hardware may not have "
+            "responded to the toggle",
+            label,
+            TOGGLE_RESPONSE_TIMEOUT,
+        )
+        return None
+    log.info(
+        "        %s  transitioned to %s after %.1fs",
+        label,
+        transition.name,
+        time.monotonic() - t0,
+    )
+
+    # Phase 2: wait for motion to finish (terminal state + quiet window).
+    final = await tracker.wait_for_stable(
+        target.hub_id, STABILIZE_QUIET_SECONDS, STABILIZE_TIMEOUT
+    )
+    if final is None:
+        log.error(
+            "        %s  door did not reach a terminal state within %.0fs",
+            label,
+            STABILIZE_TIMEOUT,
+        )
+        return None
+    log.info(
+        "        %s  settled at %s after %.1fs total",
+        label,
+        final.name,
+        time.monotonic() - t0,
+    )
+    return final
+
+
 async def run_toggle_cycle(
     client: OrbitClient, target: Device, tracker: StateTracker
 ) -> bool:
@@ -192,43 +288,33 @@ async def run_toggle_cycle(
         log.info("aborted by user before any toggle")
         return True  # nothing happened
 
-    log.info("step 5a  toggle #1 -> waiting for state to stabilize")
-    t0 = time.monotonic()
-    await client.toggle(target.hub_id, target.device_type)
-    first_final = await tracker.wait_for_stable(
-        target.hub_id, STABILIZE_QUIET_SECONDS, STABILIZE_TIMEOUT
-    )
-    log.info("        stabilized at %s after %.1fs",
-             first_final.name if first_final else "<timeout>", time.monotonic() - t0)
-
+    log.info("step 5a  toggle #1")
+    first_final = await _send_and_wait(client, target, tracker, "#1")
     if first_final is None:
-        log.error("door did not reach a stable state — aborting")
         return False
 
     log.warning("")
     log.warning("door is now %s.", first_final.name)
     if not confirm("Send second toggle to reverse?"):
-        log.warning("leaving door in state %s — will NOT attempt to reverse",
-                    first_final.name)
+        log.warning(
+            "leaving door in state %s — will NOT attempt to reverse",
+            first_final.name,
+        )
         return False
 
-    log.info("step 5b  toggle #2 -> waiting for state to stabilize")
-    t1 = time.monotonic()
-    await client.toggle(target.hub_id, target.device_type)
-    second_final = await tracker.wait_for_stable(
-        target.hub_id, STABILIZE_QUIET_SECONDS, STABILIZE_TIMEOUT
-    )
-    log.info("        stabilized at %s after %.1fs",
-             second_final.name if second_final else "<timeout>", time.monotonic() - t1)
-
+    log.info("step 5b  toggle #2")
+    second_final = await _send_and_wait(client, target, tracker, "#2")
     if second_final is None:
-        log.error("door did not reach a stable state after second toggle")
         return False
 
     log.info("")
-    log.info("cycle complete. start=%s  mid=%s  end=%s",
-             start_state.name if start_state else "?",
-             first_final.name, second_final.name)
+    start_label = start_state.name if start_state is not None else "?"
+    log.info(
+        "cycle complete. start=%s  mid=%s  end=%s",
+        start_label,
+        first_final.name,
+        second_final.name,
+    )
     if start_state is not None and second_final == start_state:
         log.info("✓ door returned to original state")
         return True
