@@ -2,7 +2,17 @@
 
 Maps the `DoorState` enum to HA's is_closed / is_opening / is_closing
 booleans. All three HA commands (open, close, stop) dispatch the same
-toggle — the hardware has no separate open/close/stop primitives.
+MQTT toggle — the hardware has no separate open/close/stop primitives.
+
+Because the hardware is toggle-only, commands are guarded against the
+current state. A blind "open" on an already-open door would toggle it
+closed (the 'Hey Siri, open the garage' → door closes hazard). Each
+command only sends the toggle when the door is in a state where that
+toggle will move it toward the requested position.
+
+HA's HomeKit bridge auto-detects a cover with device_class=garage and
+supported_features ≤ OPEN|CLOSE|STOP, and exposes it to Apple Home as
+a GarageDoorOpener accessory. No extra config required.
 """
 
 from __future__ import annotations
@@ -25,6 +35,16 @@ from ._client.domain import DoorState
 from ._client.errors import OrbitError
 from .const import DOMAIN
 from .coordinator import SkylinkCoordinator
+
+# Group DoorState values by semantic category so the guarded commands
+# below read as "is the door in a state where this command makes sense".
+_OPEN_STATES = frozenset(
+    {DoorState.OPEN, DoorState.OPEN_HALF, DoorState.OPEN_HALF_ALT}
+)
+_CLOSED_STATES = frozenset({DoorState.CLOSED})
+_MOVING_STATES = frozenset(
+    {DoorState.OPENING, DoorState.CLOSING, DoorState.CLOSE_DELAY}
+)
 
 
 async def async_setup_entry(
@@ -122,10 +142,21 @@ class SkylinkCover(CoordinatorEntity[SkylinkCoordinator], CoverEntity):
             raise HomeAssistantError(f"Failed to toggle door: {err}") from err
 
     async def async_open_cover(self, **_: Any) -> None:
-        await self._toggle()
+        # Only send the toggle when the door is actually closed. HomeKit
+        # calls cover.open_cover whenever Target is set to 0, including
+        # when CurrentDoorState is already 0 — without this guard, an
+        # accidental Siri "open" on an already-open door would close it.
+        if self._state in _CLOSED_STATES:
+            await self._toggle()
 
     async def async_close_cover(self, **_: Any) -> None:
-        await self._toggle()
+        # Same guard in the opposite direction. OPEN_HALF counts as open
+        # since a toggle from there will close the door the rest of the way.
+        if self._state in _OPEN_STATES:
+            await self._toggle()
 
     async def async_stop_cover(self, **_: Any) -> None:
-        await self._toggle()
+        # Only toggle mid-motion — toggling an idle door would actually
+        # start motion, which is the opposite of "stop".
+        if self._state in _MOVING_STATES:
+            await self._toggle()

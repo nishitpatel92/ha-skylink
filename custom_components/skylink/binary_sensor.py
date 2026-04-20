@@ -2,6 +2,13 @@
 
 Grouped under the same HA device as the cover entity, so the UI shows
 one device with two entities. Convention: is_on = True means open.
+
+Disabled by default. The cover entity already carries open/closed
+state, and the HomeKit bridge maps BinarySensorDeviceClass.GARAGE_DOOR
+to a ContactSensor service — meaning Apple Home would show a
+redundant "contact sensor" accessory right next to the Garage Door
+Opener. Users who want this sensor for HA automations can enable it
+manually via the entity registry.
 """
 
 from __future__ import annotations
@@ -39,6 +46,10 @@ class SkylinkDoorSensor(CoordinatorEntity[SkylinkCoordinator], BinarySensorEntit
     _attr_device_class = BinarySensorDeviceClass.GARAGE_DOOR
     _attr_has_entity_name = True
     _attr_name = "Door"
+    # Default-disabled — HA's HomeKit bridge automatically skips
+    # entity-registry-disabled entities, which prevents this sensor
+    # from showing up as a duplicate contact sensor in Apple Home.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: SkylinkCoordinator, hub_id: str) -> None:
         super().__init__(coordinator)
