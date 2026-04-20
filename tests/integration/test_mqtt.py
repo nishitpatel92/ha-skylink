@@ -18,7 +18,12 @@ import aiomqtt
 import pytest
 
 from custom_components.skylink._client import protocol
-from custom_components.skylink._client.domain import Device, DeviceType, DoorState
+from custom_components.skylink._client.domain import (
+    Device,
+    DeviceSnapshot,
+    DeviceType,
+    DoorState,
+)
 from custom_components.skylink._client.errors import OrbitConnectionError
 from custom_components.skylink._client.mqtt import OrbitMqtt
 
@@ -165,10 +170,17 @@ class TestDiscover:
         get_topic = protocol.mqtt_topic(_ACC_NO, protocol.TOPIC_SUFFIX_GET)
         get_result_topic = protocol.mqtt_topic(_ACC_NO, protocol.TOPIC_SUFFIX_GET_RESULT)
 
-        # Fake hub: subscribe to /get, answer on /get/result
+        # Fake hub: subscribe to /get, answer on /get/result with
+        # realistic payload shapes (one with reported.mdev.door, one
+        # without) so we confirm both paths produce the right snapshot.
         response = {
             "data": [
-                {"hub_id": "hubA", "type": "GDO", "name": "Main"},
+                {
+                    "hub_id": "hubA",
+                    "type": "GDO",
+                    "name": "Main",
+                    "reported": {"mdev": {"door": 4}},
+                },
                 {"hub_id": "hubB", "type": "NOVA_A"},
             ]
         }
@@ -186,12 +198,20 @@ class TestDiscover:
         await asyncio.sleep(0.2)  # let the fake hub subscribe
 
         await orbit_mqtt.connect(_ACC_NO, _PASSWORD)
-        devices = await orbit_mqtt.discover(timeout=3.0)
+        snapshots = await orbit_mqtt.discover(timeout=3.0)
         hub_task.cancel()
 
-        assert devices == [
-            Device(hub_id="hubA", name="Main", device_type=DeviceType.GDO),
-            Device(hub_id="hubB", name="Skylink hubB", device_type=DeviceType.NOVA_A),
+        assert snapshots == [
+            DeviceSnapshot(
+                device=Device(hub_id="hubA", name="Main", device_type=DeviceType.GDO),
+                state=DoorState.CLOSED,
+            ),
+            DeviceSnapshot(
+                device=Device(
+                    hub_id="hubB", name="Skylink hubB", device_type=DeviceType.NOVA_A
+                ),
+                state=DoorState.UNKNOWN,
+            ),
         ]
 
     async def test_timeout_when_no_response(self, orbit_mqtt: OrbitMqtt) -> None:

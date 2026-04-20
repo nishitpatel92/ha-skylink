@@ -15,7 +15,12 @@ from aioresponses import aioresponses
 
 from custom_components.skylink._client import protocol
 from custom_components.skylink._client.client import OrbitClient
-from custom_components.skylink._client.domain import Device, DeviceType, DoorState
+from custom_components.skylink._client.domain import (
+    Device,
+    DeviceSnapshot,
+    DeviceType,
+    DoorState,
+)
 from custom_components.skylink._client.errors import (
     OrbitAuthError,
     OrbitConnectionError,
@@ -143,7 +148,12 @@ class TestOperations:
     async def test_discover_delegates_to_mqtt(
         self, client: OrbitClient, fake_mqtt: MagicMock
     ) -> None:
-        expected = [Device(hub_id="a", name="A", device_type=DeviceType.GDO)]
+        expected = [
+            DeviceSnapshot(
+                device=Device(hub_id="a", name="A", device_type=DeviceType.GDO),
+                state=DoorState.CLOSED,
+            )
+        ]
         fake_mqtt.discover.return_value = expected
 
         result = await client.discover(timeout=2.5)

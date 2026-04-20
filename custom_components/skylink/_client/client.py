@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Self
 
 from . import protocol
-from .domain import Device, DeviceType
+from .domain import DeviceSnapshot, DeviceType
 from .errors import OrbitAuthError, OrbitProtocolError
 from .http import OrbitHttp
 from .mqtt import DoorStateCallback, OrbitMqtt
@@ -107,8 +107,8 @@ class OrbitClient:
         """Register a callback fired for every door-state push."""
         self._mqtt.on_door_state(callback)
 
-    async def discover(self, timeout: float = 5.0) -> list[Device]:
-        """Request the device list from the hub via MQTT."""
+    async def discover(self, timeout: float = 5.0) -> list[DeviceSnapshot]:
+        """Request the device list + current states via MQTT."""
         return await self._mqtt.discover(timeout)
 
     async def toggle(self, hub_id: str, device_type: DeviceType) -> None:

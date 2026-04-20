@@ -26,7 +26,7 @@ from typing import Any
 import aiomqtt
 
 from . import protocol
-from .domain import Device, DeviceType, DoorState
+from .domain import DeviceSnapshot, DeviceType, DoorState
 from .errors import OrbitAuthError, OrbitConnectionError, OrbitProtocolError
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class OrbitMqtt:
         self._auth_failed = False
 
         self._state_callback: DoorStateCallback | None = None
-        self._discover_future: asyncio.Future[list[Device]] | None = None
+        self._discover_future: asyncio.Future[list[DeviceSnapshot]] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -176,10 +176,14 @@ class OrbitMqtt:
         topic = protocol.mqtt_topic(self._acc_no, protocol.TOPIC_SUFFIX_DESIRE)
         await self._client.publish(topic, json.dumps(payload, separators=(",", ":")))
 
-    async def discover(self, timeout: float = _DEFAULT_DISCOVER_TIMEOUT) -> list[Device]:
+    async def discover(
+        self, timeout: float = _DEFAULT_DISCOVER_TIMEOUT
+    ) -> list[DeviceSnapshot]:
         """Publish `{}` to /get and wait for the /get/result response.
 
-        Only one discovery may be in flight at a time.
+        Returns one snapshot per device — identity + current state as
+        reported by the hub at discovery time. Only one discovery may
+        be in flight at a time.
         """
         if self._client is None:
             raise OrbitConnectionError("MQTT not connected")
@@ -253,11 +257,11 @@ class OrbitMqtt:
         if future is None or future.done():
             return
         try:
-            devices = protocol.parse_discover_response(payload)
+            snapshots = protocol.parse_discover_response(payload)
         except OrbitProtocolError as err:
             future.set_exception(err)
             return
-        future.set_result(devices)
+        future.set_result(snapshots)
 
     # ------------------------------------------------------------------
     # Background task: connect, subscribe, route, reconnect

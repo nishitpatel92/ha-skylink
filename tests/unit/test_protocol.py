@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from custom_components.skylink._client import protocol
-from custom_components.skylink._client.domain import Device, DeviceType, DoorState
+from custom_components.skylink._client.domain import (
+    Device,
+    DeviceSnapshot,
+    DeviceType,
+    DoorState,
+)
 from custom_components.skylink._client.errors import OrbitProtocolError
 
 
@@ -122,32 +127,86 @@ class TestDiscoverPayload:
     def test_build_is_empty_dict(self) -> None:
         assert protocol.build_discover_payload() == {}
 
-    def test_parse_single_gdo(self) -> None:
+    def test_parse_single_gdo_without_state(self) -> None:
+        # When no `reported` field is present, state defaults to UNKNOWN.
         payload = {
             "data": [
                 {"hub_id": "rA8qM4QS", "type": "GDO", "name": "Main Garage"},
             ]
         }
-        devices = protocol.parse_discover_response(payload)
-        assert devices == [
-            Device(hub_id="rA8qM4QS", name="Main Garage", device_type=DeviceType.GDO),
+        snapshots = protocol.parse_discover_response(payload)
+        assert snapshots == [
+            DeviceSnapshot(
+                device=Device(
+                    hub_id="rA8qM4QS", name="Main Garage", device_type=DeviceType.GDO
+                ),
+                state=DoorState.UNKNOWN,
+            ),
         ]
+
+    def test_parse_extracts_state_from_reported(self) -> None:
+        # The hub includes current state in the discovery response under
+        # reported.mdev.door — this is how the APK gets its baseline
+        # without needing a separate state query.
+        payload = {
+            "data": [
+                {
+                    "hub_id": "aaa",
+                    "type": "GDO",
+                    "name": "Main",
+                    "reported": {"mdev": {"door": 4, "rssi": -53}},
+                },
+            ]
+        }
+        snapshots = protocol.parse_discover_response(payload)
+        assert snapshots == [
+            DeviceSnapshot(
+                device=Device(hub_id="aaa", name="Main", device_type=DeviceType.GDO),
+                state=DoorState.CLOSED,
+            ),
+        ]
+
+    @pytest.mark.parametrize(
+        ("reported", "expected"),
+        [
+            (None, DoorState.UNKNOWN),                    # missing entirely
+            ("not a dict", DoorState.UNKNOWN),            # wrong type
+            ({}, DoorState.UNKNOWN),                      # no mdev
+            ({"mdev": "nope"}, DoorState.UNKNOWN),        # mdev wrong type
+            ({"mdev": {}}, DoorState.UNKNOWN),            # no door key
+            ({"mdev": {"door": "not int"}}, DoorState.UNKNOWN),  # door wrong type
+            ({"mdev": {"door": 99}}, DoorState.UNKNOWN),  # out-of-range door int
+        ],
+    )
+    def test_parse_defaults_state_to_unknown_on_malformed_reported(
+        self, reported: object, expected: DoorState
+    ) -> None:
+        entry: dict[str, object] = {"hub_id": "x", "type": "GDO"}
+        if reported is not None:
+            entry["reported"] = reported
+        snapshots = protocol.parse_discover_response({"data": [entry]})
+        assert len(snapshots) == 1
+        assert snapshots[0].state is expected
 
     def test_parse_multiple_mixed_types(self) -> None:
         payload = {
             "data": [
-                {"hub_id": "aaa", "type": "GDO"},
+                {"hub_id": "aaa", "type": "GDO", "reported": {"mdev": {"door": 1}}},
                 {"hub_id": "bbb", "type": "NOVA_A"},
-                {"hub_id": "ccc", "type": "NVMini", "name": "Barn"},
+                {
+                    "hub_id": "ccc",
+                    "type": "NVMini",
+                    "name": "Barn",
+                    "reported": {"mdev": {"door": 4}},
+                },
             ]
         }
-        devices = protocol.parse_discover_response(payload)
-        assert {d.hub_id for d in devices} == {"aaa", "bbb", "ccc"}
-        assert {d.device_type for d in devices} == {
-            DeviceType.GDO,
-            DeviceType.NOVA_A,
-            DeviceType.NV_MINI,
-        }
+        snapshots = protocol.parse_discover_response(payload)
+        assert {s.device.hub_id for s in snapshots} == {"aaa", "bbb", "ccc"}
+        by_hub = {s.device.hub_id: s.state for s in snapshots}
+        assert by_hub["aaa"] == DoorState.OPEN
+        assert by_hub["bbb"] == DoorState.UNKNOWN
+        assert by_hub["ccc"] == DoorState.CLOSED
 
     def test_parse_skips_unknown_types(self) -> None:
         payload = {"data": [{"hub_id": "x", "type": "FUTURE_TYPE"}]}
@@ -158,8 +217,10 @@ class TestDiscoverPayload:
         assert protocol.parse_discover_response(payload) == []
 
     def test_parse_uses_fallback_name_when_missing(self) -> None:
-        devices = protocol.parse_discover_response({"data": [{"hub_id": "ABC", "type": "GDO"}]})
-        assert devices[0].name == "Skylink ABC"
+        snapshots = protocol.parse_discover_response(
+            {"data": [{"hub_id": "ABC", "type": "GDO"}]}
+        )
+        assert snapshots[0].device.name == "Skylink ABC"
 
     def test_parse_rejects_non_list_data(self) -> None:
         with pytest.raises(OrbitProtocolError, match="missing 'data' list"):

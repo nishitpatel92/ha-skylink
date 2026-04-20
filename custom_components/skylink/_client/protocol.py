@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .domain import Device, DeviceType, DoorState
+from .domain import Device, DeviceSnapshot, DeviceType, DoorState
 from .errors import OrbitProtocolError
 
 # ---------------------------------------------------------------------------
@@ -200,15 +200,24 @@ def build_discover_payload() -> dict[str, Any]:
     return {}
 
 
-def parse_discover_response(payload: dict[str, Any]) -> list[Device]:
-    """Parse a /get/result payload into a list of Device.
+def parse_discover_response(payload: dict[str, Any]) -> list[DeviceSnapshot]:
+    """Parse a /get/result payload into a list of DeviceSnapshots.
 
     Shape (inferred from APK's `Gson().fromJson(str, TestData.class)` +
     SkyLinkDevice field names):
-        {"data": [{"hub_id": "...", "type": "GDO", "name": "...", ...}, ...]}
+        {"data": [
+            {"hub_id": "...", "type": "GDO", "name": "...",
+             "reported": {"mdev": {"door": <int>, ...}}},
+            ...
+        ]}
 
-    Unknown device types are skipped with a log note rather than raising —
-    Skylink may add new types we don't support.
+    Each entry's `reported.mdev.door` carries the device's current state
+    — the APK uses this as the baseline before any /update/result pushes
+    arrive. Missing or malformed state falls through to DoorState.UNKNOWN
+    so an otherwise-valid discovery response still surfaces the device.
+
+    Unknown device types are skipped — Skylink may add new types we
+    don't support.
     """
     raw_list = payload.get("data")
     if not isinstance(raw_list, list):
@@ -216,7 +225,7 @@ def parse_discover_response(payload: dict[str, Any]) -> list[Device]:
             f"Discovery response missing 'data' list, got {type(raw_list).__name__}"
         )
 
-    devices: list[Device] = []
+    snapshots: list[DeviceSnapshot] = []
     for entry in raw_list:
         if not isinstance(entry, dict):
             continue
@@ -229,8 +238,25 @@ def parse_discover_response(payload: dict[str, Any]) -> list[Device]:
         except ValueError:
             continue  # unknown/unsupported device type
         name = entry.get("name") or f"Skylink {hub_id}"
-        devices.append(Device(hub_id=hub_id, name=str(name), device_type=device_type))
-    return devices
+
+        reported = entry.get("reported")
+        mdev = reported.get("mdev") if isinstance(reported, dict) else None
+        door_val = mdev.get("door") if isinstance(mdev, dict) else None
+        state = (
+            DoorState.from_wire(door_val)
+            if isinstance(door_val, int)
+            else DoorState.UNKNOWN
+        )
+
+        snapshots.append(
+            DeviceSnapshot(
+                device=Device(
+                    hub_id=hub_id, name=str(name), device_type=device_type
+                ),
+                state=state,
+            )
+        )
+    return snapshots
 
 
 # ---------------------------------------------------------------------------

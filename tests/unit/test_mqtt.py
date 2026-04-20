@@ -14,7 +14,12 @@ import json
 import pytest
 
 from custom_components.skylink._client import protocol
-from custom_components.skylink._client.domain import Device, DeviceType, DoorState
+from custom_components.skylink._client.domain import (
+    Device,
+    DeviceSnapshot,
+    DeviceType,
+    DoorState,
+)
 from custom_components.skylink._client.errors import OrbitProtocolError
 from custom_components.skylink._client.mqtt import OrbitMqtt
 
@@ -99,17 +104,30 @@ class TestDiscoverDispatch:
 
         payload = {
             "data": [
-                {"hub_id": "aaa", "type": "GDO", "name": "Main"},
+                {
+                    "hub_id": "aaa",
+                    "type": "GDO",
+                    "name": "Main",
+                    "reported": {"mdev": {"door": 4}},
+                },
                 {"hub_id": "bbb", "type": "NOVA_A"},
             ]
         }
         mqtt._handle_incoming(_get_result_topic(), json.dumps(payload).encode())
 
         assert mqtt._discover_future.done()
-        devices = mqtt._discover_future.result()
-        assert devices == [
-            Device(hub_id="aaa", name="Main", device_type=DeviceType.GDO),
-            Device(hub_id="bbb", name="Skylink bbb", device_type=DeviceType.NOVA_A),
+        snapshots = mqtt._discover_future.result()
+        assert snapshots == [
+            DeviceSnapshot(
+                device=Device(hub_id="aaa", name="Main", device_type=DeviceType.GDO),
+                state=DoorState.CLOSED,
+            ),
+            DeviceSnapshot(
+                device=Device(
+                    hub_id="bbb", name="Skylink bbb", device_type=DeviceType.NOVA_A
+                ),
+                state=DoorState.UNKNOWN,
+            ),
         ]
 
     async def test_sets_future_exception_on_malformed_payload(self, mqtt: OrbitMqtt) -> None:

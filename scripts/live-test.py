@@ -44,7 +44,7 @@ _CLIENT_ROOT = _REPO_ROOT / "custom_components" / "skylink"
 sys.path.insert(0, str(_CLIENT_ROOT))
 
 from _client.client import OrbitClient  # noqa: E402
-from _client.domain import Device, DoorState  # noqa: E402
+from _client.domain import Device, DeviceSnapshot, DoorState  # noqa: E402
 from _client.errors import OrbitAuthError, OrbitConnectionError, OrbitError  # noqa: E402
 
 logging.basicConfig(
@@ -57,7 +57,6 @@ log = logging.getLogger("live-test")
 # Tunables — conservative defaults. A residential door opens in 10-15s;
 # allowing 60s for full motion to complete gives margin for slow doors,
 # pre-motion delays (lights, beeper), and variable hardware.
-INITIAL_PUSH_TIMEOUT = 15.0
 DISCOVER_TIMEOUT = 10.0
 TOGGLE_RESPONSE_TIMEOUT = 15.0  # How long to wait for the door to start moving
 STABILIZE_TIMEOUT = 60.0
@@ -176,34 +175,32 @@ async def run_connect(client: OrbitClient) -> None:
     log.info("        -> connected")
 
 
-async def run_discover(client: OrbitClient) -> list[Device]:
+async def run_discover(client: OrbitClient) -> list[DeviceSnapshot]:
     log.info("step 3  discovering devices (timeout=%.1fs)", DISCOVER_TIMEOUT)
-    devices = await client.discover(timeout=DISCOVER_TIMEOUT)
-    if not devices:
+    snapshots = await client.discover(timeout=DISCOVER_TIMEOUT)
+    if not snapshots:
         log.error("        -> no devices discovered")
         return []
-    for d in devices:
+    for s in snapshots:
         log.info(
-            "        -> %s  type=%s  name=%r",
-            d.hub_id,
-            d.device_type.value,
-            d.name,
+            "        -> %s  type=%s  name=%r  state=%s",
+            s.device.hub_id,
+            s.device.device_type.value,
+            s.device.name,
+            s.state.name,
         )
-    return devices
+    return snapshots
 
 
-async def run_read_initial_state(tracker: StateTracker, devices: list[Device]) -> None:
-    log.info("step 4  reading initial state (up to %.0fs)", INITIAL_PUSH_TIMEOUT)
-    # Wait for at least one push per device, best-effort.
-    tasks = [
-        asyncio.create_task(tracker.wait_for_any_update(d.hub_id, INITIAL_PUSH_TIMEOUT))
-        for d in devices
-    ]
-    await asyncio.gather(*tasks, return_exceptions=True)
-    for d in devices:
-        cur = tracker.current(d.hub_id)
-        label = cur.name if cur is not None else "<no push received — door may be idle>"
-        log.info("        %s  current=%s", d.hub_id, label)
+def seed_tracker(tracker: StateTracker, snapshots: list[DeviceSnapshot]) -> None:
+    """Prime the tracker with each device's initial state from discovery.
+
+    The /get/result response includes `reported.mdev.door` per device —
+    same mechanism the APK uses to know the baseline. No need for a
+    separate "wait for first push" step.
+    """
+    for s in snapshots:
+        tracker.on_update(s.device.hub_id, s.state)
 
 
 def confirm(prompt: str) -> bool:
@@ -339,31 +336,36 @@ async def main(args: argparse.Namespace) -> int:
     try:
         await run_auth(client, args.email, password)
         await run_connect(client)
-        devices = await run_discover(client)
-        if not devices:
+        snapshots = await run_discover(client)
+        if not snapshots:
             return 1
-        await run_read_initial_state(tracker, devices)
+        seed_tracker(tracker, snapshots)
 
         if not args.toggle:
             log.info("")
             log.info("dry run complete. re-run with --toggle to actuate the door.")
             return 0
 
-        if len(devices) > 1 and args.hub is None:
+        if len(snapshots) > 1 and args.hub is None:
             log.error("multiple devices found — pick one with --hub <hub_id>:")
-            for d in devices:
-                log.error("  %s  %s  %r", d.hub_id, d.device_type.value, d.name)
+            for s in snapshots:
+                log.error(
+                    "  %s  %s  %r",
+                    s.device.hub_id,
+                    s.device.device_type.value,
+                    s.device.name,
+                )
             return 2
 
-        target = next(
-            (d for d in devices if args.hub is None or d.hub_id == args.hub),
+        target_snapshot = next(
+            (s for s in snapshots if args.hub is None or s.device.hub_id == args.hub),
             None,
         )
-        if target is None:
+        if target_snapshot is None:
             log.error("--hub %s not in discovered devices", args.hub)
             return 2
 
-        success = await run_toggle_cycle(client, target, tracker)
+        success = await run_toggle_cycle(client, target_snapshot.device, tracker)
         return 0 if success else 1
 
     except OrbitAuthError as err:

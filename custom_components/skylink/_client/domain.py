@@ -68,10 +68,25 @@ class DeviceType(StrEnum):
 class Device:
     """A single controllable Skylink device.
 
-    Identity + metadata only — runtime state lives in the client's
-    state cache and is queried separately.
+    Identity + metadata only. Current state is carried separately in
+    `DeviceSnapshot` so the Device itself can stay immutable and
+    comparable.
     """
 
     hub_id: str
     name: str
     device_type: DeviceType
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceSnapshot:
+    """A device along with its most-recently-observed state.
+
+    Returned from `OrbitClient.discover()` — the server includes the
+    current `reported.mdev.door` state in each entry of the device
+    list, so callers don't need to wait for a fresh MQTT push to know
+    what the door is doing.
+    """
+
+    device: Device
+    state: DoorState

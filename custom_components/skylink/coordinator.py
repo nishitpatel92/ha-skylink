@@ -13,39 +13,28 @@ config entry.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from ._client.client import OrbitClient
-from ._client.domain import Device, DoorState
+from ._client.domain import DeviceSnapshot, DoorState
 from ._client.errors import OrbitAuthError, OrbitConnectionError, OrbitProtocolError
 from .const import DEFAULT_DISCOVERY_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
-class DoorView:
-    """Per-device view: identity + current state.
-
-    Domain `Device` is frozen by design; wrapping it with state here
-    keeps the domain pure.
-    """
-
-    device: Device
-    state: DoorState
-
-
-type _CoordinatorData = dict[str, DoorView]
+type _CoordinatorData = dict[str, DeviceSnapshot]
 
 
 class SkylinkCoordinator(DataUpdateCoordinator[_CoordinatorData]):
-    """Maintains a hub_id → DoorView map.
+    """Maintains a hub_id → DeviceSnapshot map.
 
-    Seeded by MQTT discovery; updated in place by push state callbacks.
+    Seeded (including initial states) by MQTT discovery; updated in
+    place by push state callbacks as `/update/result` arrives.
     """
 
     def __init__(self, hass: HomeAssistant, client: OrbitClient) -> None:
@@ -64,15 +53,15 @@ class SkylinkCoordinator(DataUpdateCoordinator[_CoordinatorData]):
 
     def _on_state_update(self, hub_id: str, state: DoorState) -> None:
         current: _CoordinatorData = self.data or {}
-        view = current.get(hub_id)
-        if view is None:
+        snapshot = current.get(hub_id)
+        if snapshot is None:
             _LOGGER.debug("ignoring state for unknown hub_id %s", hub_id)
             return
-        if view.state == state:
+        if snapshot.state == state:
             return  # no-op
 
         updated = dict(current)
-        updated[hub_id] = replace(view, state=state)
+        updated[hub_id] = replace(snapshot, state=state)
         self.async_set_updated_data(updated)
 
     # ------------------------------------------------------------------
@@ -81,7 +70,7 @@ class SkylinkCoordinator(DataUpdateCoordinator[_CoordinatorData]):
 
     async def _async_update_data(self) -> _CoordinatorData:
         try:
-            devices = await self.client.discover()
+            snapshots = await self.client.discover()
         except OrbitAuthError as err:
             raise ConfigEntryAuthFailed("Skylink authentication expired") from err
         except OrbitConnectionError as err:
@@ -89,12 +78,7 @@ class SkylinkCoordinator(DataUpdateCoordinator[_CoordinatorData]):
         except OrbitProtocolError as err:
             raise UpdateFailed(f"Protocol error during discovery: {err}") from err
 
-        previous: _CoordinatorData = self.data or {}
-        next_map: _CoordinatorData = {}
-        for d in devices:
-            old = previous.get(d.hub_id)
-            next_map[d.hub_id] = DoorView(
-                device=d,
-                state=old.state if old is not None else DoorState.UNKNOWN,
-            )
-        return next_map
+        # The discovery response carries each device's current state, so
+        # we don't need to preserve state across refreshes — the server
+        # is authoritative.
+        return {s.device.hub_id: s for s in snapshots}
