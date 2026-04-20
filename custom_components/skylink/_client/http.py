@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 import aiohttp
+from aiohttp.resolver import ThreadedResolver
 
 from . import protocol
 from .errors import OrbitConnectionError, OrbitProtocolError
@@ -37,7 +38,13 @@ class OrbitHttp:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # Use the threaded resolver explicitly rather than aiohttp's
+            # default auto-selection, which picks aiodns if available.
+            # aiodns/aiohttp version skew (common when HA is co-installed)
+            # breaks getaddrinfo silently; the threaded resolver is
+            # slower but version-independent.
+            connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
+            self._session = aiohttp.ClientSession(connector=connector)
             self._owns_session = True
         return self._session
 
