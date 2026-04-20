@@ -17,17 +17,30 @@ because the client imports from custom_components/skylink/_client/.
 
 from __future__ import annotations
 
-import argparse
-import asyncio
-import getpass
-import logging
 import os
 import sys
-import time
 from pathlib import Path
 
+# Re-exec under the repo's venv Python if we weren't launched with it.
+# aiohttp / aiomqtt live there, not in the system interpreter. We compare
+# sys.prefix (which Python sets to the venv root when launched via the
+# venv's python) rather than sys.executable — sys.executable resolves
+# symlinks, so a venv python that links to the system python can't be
+# distinguished that way.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_VENV_DIR = _REPO_ROOT / ".venv"
+_VENV_PY = _VENV_DIR / "bin" / "python"
+if _VENV_PY.exists() and Path(sys.prefix).resolve() != _VENV_DIR.resolve():
+    os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
+
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import getpass  # noqa: E402
+import logging  # noqa: E402
+import time  # noqa: E402
+
 # Make `_client` importable without pulling homeassistant into the chain.
-_CLIENT_ROOT = Path(__file__).parent.parent / "custom_components" / "skylink"
+_CLIENT_ROOT = _REPO_ROOT / "custom_components" / "skylink"
 sys.path.insert(0, str(_CLIENT_ROOT))
 
 from _client.client import OrbitClient  # noqa: E402
